@@ -32,8 +32,12 @@ namespace Files.App.Actions
 				var password = string.Empty;
 
 				BaseStorageFile archive = await StorageHelpers.ToStorageItem<BaseStorageFile>(selectedItem.ItemPath);
-				BaseStorageFolder currentFolder = await StorageHelpers.ToStorageItem<BaseStorageFolder>(context.ShellPage?.ShellViewModel.CurrentFolder.ItemPath);
-				BaseStorageFolder destinationFolder = null;
+				var currentFolderPath = context.ShellPage?.ShellViewModel?.CurrentFolder?.ItemPath;
+				if (string.IsNullOrEmpty(currentFolderPath))
+					return;
+				
+				BaseStorageFolder currentFolder = await StorageHelpers.ToStorageItem<BaseStorageFolder>(currentFolderPath);
+				BaseStorageFolder? destinationFolder = null;
 
 				if (archive?.Path is null)
 					return;
@@ -55,7 +59,7 @@ namespace Files.App.Actions
 					if (option != ContentDialogResult.Primary)
 						return;
 
-					password = Encoding.UTF8.GetString(decompressArchiveViewModel.Password);
+					password = decompressArchiveViewModel.Password != null ? Encoding.UTF8.GetString(decompressArchiveViewModel.Password) : string.Empty;
 				}
 
 				if (currentFolder is not null)

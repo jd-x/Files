@@ -2,11 +2,13 @@
 // Licensed under the MIT License.
 
 using Microsoft.Extensions.Logging;
+using Microsoft.UI.Xaml.Media.Imaging;
 using System.IO;
 using System.Text.RegularExpressions;
 using Windows.Storage;
 using Windows.Storage.FileProperties;
 using Windows.Storage.Search;
+using Windows.Storage.Streams;
 using FileAttributes = System.IO.FileAttributes;
 using WIN32_FIND_DATA = Files.App.Helpers.Win32PInvoke.WIN32_FIND_DATA;
 
@@ -68,29 +70,104 @@ namespace Files.App.Utils.Storage
 			}
 		}
 
-		public Task SearchAsync(IList<ListedItem> results, CancellationToken token)
+		public async Task SearchAsync(IList<ListedItem> results, CancellationToken token)
 		{
 			try
 			{
-				if (App.LibraryManager.TryGetLibrary(Folder, out var library))
+				App.Logger?.LogInformation($"=== FolderSearch.SearchAsync START === Query: '{Query}', Folder: '{Folder}'");
+				
+				// Check if we should use Everything for global search  
+				var userSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
+				var searchEngine = userSettingsService.GeneralSettingsService.PreferredSearchEngine;
+				App.Logger?.LogInformation($"Search Engine Setting: {searchEngine}");
+				
+				if (searchEngine == Files.App.Data.Enums.SearchEngine.Everything)
 				{
-					return AddItemsForLibraryAsync(library, results, token);
-				}
-				else if (Folder == "Home")
-				{
-					return AddItemsForHomeAsync(results, token);
+					var everythingService = Ioc.Default.GetService<Files.App.Services.Search.IEverythingSearchService>();
+					if (everythingService != null)
+					{
+						var isAvailable = everythingService.IsEverythingAvailable();
+						App.Logger?.LogInformation($"Everything Service Available: {isAvailable}");
+						
+						if (isAvailable)
+						{
+							App.Logger?.LogInformation("Using Everything for search");
+							try
+							{
+								var everythingResults = await everythingService.SearchAsync(Query, Folder, token);
+								App.Logger?.LogInformation($"Everything search completed with {everythingResults.Count} results");
+								App.Logger?.LogInformation($"MaxItemCount: {MaxItemCount}, UsedMaxItemCount: {UsedMaxItemCount}");
+								App.Logger?.LogInformation($"results is null: {results == null}, results.Count before: {results?.Count ?? -1}");
+								App.Logger?.LogInformation($"everythingResults is null: {everythingResults == null}");
+								
+								if (everythingResults != null && everythingResults.Count > 0)
+								{
+									App.Logger?.LogInformation($"First result: {everythingResults[0]?.ItemPath ?? "null"}");
+								}
+								
+								int addedCount = 0;
+								// Fix: UsedMaxItemCount can be uint.MaxValue which overflows when cast to int
+								var itemsToTake = UsedMaxItemCount == uint.MaxValue ? everythingResults.Count : Math.Min(everythingResults.Count, (int)UsedMaxItemCount);
+								App.Logger?.LogInformation($"Taking {itemsToTake} items from {everythingResults.Count} results");
+								
+								foreach (var item in everythingResults.Take(itemsToTake))
+								{
+									if (item == null)
+									{
+										App.Logger?.LogInformation("Null item in everythingResults");
+										continue;
+									}
+									results.Add(item);
+									addedCount++;
+									if (results.Count == 32 || results.Count % 300 == 0)
+									{
+										SearchTick?.Invoke(this, EventArgs.Empty);
+									}
+								}
+								
+								App.Logger?.LogInformation($"Added {addedCount} items to results, final results.Count: {results.Count}");
+								return; // Exit early since we used Everything
+							}
+							catch (OperationCanceledException)
+							{
+								App.Logger?.LogInformation("Everything search was cancelled");
+								return;
+							}
+							catch (Exception ex)
+							{
+								App.Logger?.LogError(ex, "Everything search failed");
+								// Fall through to use default search
+							}
+						}
+					}
+					else
+					{
+						App.Logger?.LogInformation("Everything service not found in DI container");
+					}
 				}
 				else
 				{
-					return AddItemsAsync(Folder, results, token);
+					App.Logger?.LogInformation($"Not using Everything because search engine is set to: {searchEngine}");
+				}
+
+				// Fall back to default search
+				if (App.LibraryManager.TryGetLibrary(Folder, out var library))
+				{
+					await AddItemsForLibraryAsync(library, results, token);
+				}
+				else if (Folder == "Home")
+				{
+					await AddItemsForHomeAsync(results, token);
+				}
+				else
+				{
+					await AddItemsAsync(Folder, results, token);
 				}
 			}
 			catch (Exception e)
 			{
-				App.Logger.LogWarning(e, "Search failure");
+				App.Logger?.LogInformation(e, "Search failure");
 			}
-
-			return Task.CompletedTask;
 		}
 
 		private async Task AddItemsForHomeAsync(IList<ListedItem> results, CancellationToken token)
@@ -129,7 +206,7 @@ namespace Files.App.Utils.Storage
 			}
 			catch (Exception e)
 			{
-				App.Logger.LogWarning(e, "Search failure");
+				App.Logger?.LogInformation(e, "Search failure");
 			}
 
 			return results;
@@ -137,10 +214,22 @@ namespace Files.App.Utils.Storage
 
 		private async Task SearchAsync(BaseStorageFolder folder, IList<ListedItem> results, CancellationToken token)
 		{
+			if (folder is null)
+			{
+				App.Logger?.LogInformation("SearchAsync called with null folder");
+				return;
+			}
+
 			//var sampler = new IntervalSampler(500);
 			uint index = 0;
 			var stepSize = Math.Min(defaultStepSize, UsedMaxItemCount);
 			var options = ToQueryOptions();
+
+			if (options is null)
+			{
+				App.Logger?.LogInformation("ToQueryOptions returned null");
+				return;
+			}
 
 			var queryResult = folder.CreateItemQueryWithOptions(options);
 			var items = await queryResult.GetItemsAsync(0, stepSize);
@@ -161,7 +250,7 @@ namespace Files.App.Utils.Storage
 					}
 					catch (Exception ex)
 					{
-						App.Logger.LogWarning(ex, "Error creating ListedItem from StorageItem");
+						App.Logger?.LogInformation(ex, "Error creating ListedItem from StorageItem");
 					}
 
 					if (results.Count == 32 || results.Count % 300 == 0 /*|| sampler.CheckNow()*/)
@@ -316,14 +405,25 @@ namespace Files.App.Utils.Storage
 				{
 					try
 					{
-						IStorageItem item = (BaseStorageFile)await GetStorageFileAsync(match.FilePath);
-						item ??= (BaseStorageFolder)await GetStorageFolderAsync(match.FilePath);
-						if (!item.Name.StartsWith('.') || UserSettingsService.FoldersSettingsService.ShowDotFiles)
+						IStorageItem item = null;
+						var fileResult = await GetStorageFileAsync(match.FilePath);
+						if (fileResult && fileResult.Result is not null)
+						{
+							item = fileResult.Result;
+						}
+						else
+						{
+							var folderResult = await GetStorageFolderAsync(match.FilePath);
+							if (folderResult && folderResult.Result is not null)
+								item = folderResult.Result;
+						}
+						
+						if (item is not null && (!item.Name.StartsWith('.') || UserSettingsService.FoldersSettingsService.ShowDotFiles))
 							results.Add(await GetListedItemAsync(item));
 					}
 					catch (Exception ex)
 					{
-						App.Logger.LogWarning(ex, "Error creating ListedItem from StorageItem");
+						App.Logger?.LogInformation(ex, "Error creating ListedItem from StorageItem");
 					}
 				}
 
@@ -348,9 +448,9 @@ namespace Files.App.Utils.Storage
 				var workingFolder = await GetStorageFolderAsync(folder);
 
 				var hiddenOnlyFromWin32 = false;
-				if (workingFolder)
+				if (workingFolder && workingFolder.Result is not null)
 				{
-					await SearchAsync(workingFolder, results, token);
+					await SearchAsync(workingFolder.Result, results, token);
 					hiddenOnlyFromWin32 = (results.Count != 0);
 				}
 
@@ -474,25 +574,18 @@ namespace Files.App.Utils.Storage
 				}
 			}
 
-			if (listedItem is not null && MaxItemCount > 0) // Only load icon for searchbox suggestions
+			// For Everything search results, defer thumbnail loading to avoid reentrancy issues
+			if (listedItem is not null && (MaxItemCount > 0 || listedItem.LoadFileIcon)) // Load icon for searchbox suggestions or when explicitly requested
 			{
-				_ = FileThumbnailHelper.GetIconAsync(
-					listedItem.ItemPath,
-					Constants.ShellIconSizes.Small,
-					isFolder,
-					IconOptions.ReturnIconOnly | IconOptions.UseCurrentScale)
-					.ContinueWith((t) =>
-					{
-						if (t.IsCompletedSuccessfully && t.Result is not null)
-						{
-							_ = FilesystemTasks.Wrap(() => MainWindow.Instance.DispatcherQueue.EnqueueOrInvokeAsync(async () =>
-							{
-								var bitmapImage = await t.Result.ToBitmapAsync();
-								if (bitmapImage is not null)
-									listedItem.FileImage = bitmapImage;
-							}, Microsoft.UI.Dispatching.DispatcherQueuePriority.Low));
-						}
-					});
+				App.Logger?.LogInformation("FolderSearch: Deferring icon load for {Path}, isFolder={IsFolder}", listedItem.ItemPath, isFolder);
+				// Just mark that we want to load the icon later, don't load it now
+				listedItem.LoadFileIcon = true;  // Enable thumbnail loading with hybrid approach
+				listedItem.NeedsPlaceholderGlyph = true;
+			}
+			else
+			{
+				App.Logger?.LogInformation("FolderSearch: Skipping icon load for {Path}, listedItem null={IsNull}, MaxItemCount={MaxItemCount}, LoadFileIcon={LoadFileIcon}", 
+					listedItem?.ItemPath ?? "null", listedItem is null, MaxItemCount, listedItem?.LoadFileIcon ?? false);
 			}
 
 			return listedItem;
@@ -589,18 +682,18 @@ namespace Files.App.Utils.Storage
 					};
 				}
 			}
-			if (listedItem is not null && MaxItemCount > 0) // Only load icon for searchbox suggestions
+			// For Everything search results, defer thumbnail loading to avoid reentrancy issues
+			if (listedItem is not null && (MaxItemCount > 0 || listedItem.LoadFileIcon)) // Load icon for searchbox suggestions or when explicitly requested
 			{
-				var iconResult = await FileThumbnailHelper.GetIconAsync(
-					item.Path,
-					Constants.ShellIconSizes.Small,
-					item.IsOfType(StorageItemTypes.Folder),
-					IconOptions.ReturnIconOnly | IconOptions.UseCurrentScale);
-
-				if (iconResult is not null)
-					listedItem.FileImage = await iconResult.ToBitmapAsync();
-				else
-					listedItem.NeedsPlaceholderGlyph = true;
+				App.Logger?.LogInformation("FolderSearch: Deferring icon load for storage item {Path}", item.Path);
+				// Just mark that we want to load the icon later, don't load it now
+				listedItem.LoadFileIcon = true;  // Enable thumbnail loading with hybrid approach
+				listedItem.NeedsPlaceholderGlyph = true;
+			}
+			else
+			{
+				App.Logger?.LogInformation("FolderSearch: Skipping icon load for storage item {Path}, listedItem null={IsNull}, MaxItemCount={MaxItemCount}, LoadFileIcon={LoadFileIcon}", 
+					item?.Path ?? "null", listedItem is null, MaxItemCount, listedItem?.LoadFileIcon ?? false);
 			}
 			return listedItem;
 		}

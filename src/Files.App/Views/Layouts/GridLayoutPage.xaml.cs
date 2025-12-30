@@ -157,24 +157,33 @@ namespace Files.App.Views.Layouts
 
 		protected override void ItemManipulationModel_ScrollIntoViewInvoked(object? sender, ListedItem e)
 		{
-			FileList.ScrollIntoView(e);
+			DispatcherQueue.TryEnqueue(() =>
+			{
+				FileList.ScrollIntoView(e);
+			});
 		}
 
 		protected override void ItemManipulationModel_ScrollToTopInvoked(object? sender, EventArgs e)
 		{
-			if (FolderSettings?.LayoutMode is FolderLayoutModes.ListView)
-				ContentScroller?.ChangeView(0, null, null, true);
-			else
-				ContentScroller?.ChangeView(null, 0, null, true);
+			DispatcherQueue.TryEnqueue(() =>
+			{
+				if (FolderSettings?.LayoutMode is FolderLayoutModes.ListView)
+					ContentScroller?.ChangeView(0, null, null, true);
+				else
+					ContentScroller?.ChangeView(null, 0, null, true);
+			});
 		}
 
 		protected override void ItemManipulationModel_FocusSelectedItemsInvoked(object? sender, EventArgs e)
 		{
-			if (SelectedItems.Any())
+			DispatcherQueue.TryEnqueue(() =>
 			{
-				FileList.ScrollIntoView(SelectedItems.Last());
-				(FileList.ContainerFromItem(SelectedItems.Last()) as GridViewItem)?.Focus(FocusState.Keyboard);
-			}
+				if (SelectedItems.Any())
+				{
+					FileList.ScrollIntoView(SelectedItems.Last());
+					(FileList.ContainerFromItem(SelectedItems.Last()) as GridViewItem)?.Focus(FocusState.Keyboard);
+				}
+			});
 		}
 
 		protected override void ItemManipulationModel_AddSelectedItemInvoked(object? sender, ListedItem e)
@@ -222,6 +231,12 @@ namespace Files.App.Views.Layouts
 				FolderSettings.LayoutModeChangeRequested -= FolderSettings_LayoutModeChangeRequested;
 
 			UserSettingsService.LayoutSettingsService.PropertyChanged -= LayoutSettingsService_PropertyChanged;
+			
+			// Cleanup scroll event handler
+			if (ContentScroller != null)
+			{
+				ContentScroller.ViewChanged -= ContentScroller_ViewChanged;
+			}
 		}
 
 		private void LayoutSettingsService_PropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -336,6 +351,12 @@ namespace Files.App.Views.Layouts
 		private void FileList_Loaded(object sender, RoutedEventArgs e)
 		{
 			ContentScroller = FileList.FindDescendant<ScrollViewer>(x => x.Name == "ScrollViewer");
+			
+			// Hook up scroll event for viewport tracking
+			if (ContentScroller != null)
+			{
+				ContentScroller.ViewChanged += ContentScroller_ViewChanged;
+			}
 		}
 
 		protected override void FileList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -702,6 +723,7 @@ namespace Files.App.Views.Layouts
 			selectionCheckbox.PointerExited -= SelectionCheckbox_PointerExited;
 			selectionCheckbox.PointerCanceled -= SelectionCheckbox_PointerCanceled;
 
+			// Call base class method for viewport tracking
 			base.FileList_ContainerContentChanging(sender, args);
 			SetCheckboxSelectionState(args.Item, args.ItemContainer as GridViewItem);
 

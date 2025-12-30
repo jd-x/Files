@@ -172,14 +172,14 @@ namespace Files.App.Helpers
 
 				if (imageSource is null)
 				{
-					var result = await FileThumbnailHelper.GetIconAsync(
-						path,
-						Constants.ShellIconSizes.Small,
-						true,
-						IconOptions.ReturnIconOnly | IconOptions.UseCurrentScale);
+									var result = await FileThumbnailHelper.GetIconAsync(
+					path,
+					Constants.ShellIconSizes.Large,
+					true,
+					IconOptions.ReturnIconOnly | IconOptions.UseCurrentScale);
 
-					if (result is not null)
-						imageSource = await result.ToBitmapAsync();
+				if (result is not null)
+					imageSource = await result.ToBitmapAsync();
 				}
 			}
 
@@ -198,7 +198,7 @@ namespace Files.App.Helpers
 				iconSource.ImageSource = new BitmapImage(new Uri(Constants.FluentIconsPaths.HomeIcon));
 			}
 			else if (currentPath == "ReleaseNotes")
-			{
+			{ 
 				tabLocationHeader = Strings.ReleaseNotes.GetLocalizedResource();
 				iconSource.ImageSource = new BitmapImage(new Uri(AppLifecycleHelper.AppIconPath));
 			}
@@ -341,8 +341,7 @@ namespace Files.App.Helpers
 		public static async Task OpenSelectedItemsAsync(IShellPage associatedInstance, bool openViaApplicationPicker = false)
 		{
 			// Don't open files and folders inside recycle bin
-			if (associatedInstance.ShellViewModel is null ||
-				associatedInstance.ShellViewModel.WorkingDirectory.StartsWith(Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.Ordinal) ||
+			if (associatedInstance.ShellViewModel.WorkingDirectory.StartsWith(Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.Ordinal) ||
 				associatedInstance.SlimContentPage?.SelectedItems is null)
 			{
 				return;
@@ -379,8 +378,7 @@ namespace Files.App.Helpers
 		public static async Task OpenItemsWithExecutableAsync(IShellPage associatedInstance, IEnumerable<IStorageItemWithPath> items, string executablePath)
 		{
 			// Don't open files and folders inside recycle bin
-			if (associatedInstance.ShellViewModel is null ||
-				associatedInstance.ShellViewModel.WorkingDirectory.StartsWith(Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.Ordinal) ||
+			if (associatedInstance.ShellViewModel.WorkingDirectory.StartsWith(Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.Ordinal) ||
 				associatedInstance.SlimContentPage is null)
 				return;
 
@@ -400,9 +398,6 @@ namespace Files.App.Helpers
 		/// <param name="forceOpenInNewTab">Open folders in a new tab regardless of the "OpenFoldersInNewTab" option</param>
 		public static async Task<bool> OpenPath(string path, IShellPage associatedInstance, FilesystemItemType? itemType = null, bool openSilent = false, bool openViaApplicationPicker = false, IEnumerable<string>? selectItems = null, string? args = default, bool forceOpenInNewTab = false)
 		{
-			if (associatedInstance.ShellViewModel is null)
-				return false;
-
 			string previousDir = associatedInstance.ShellViewModel.WorkingDirectory;
 			bool isHiddenItem = Win32Helper.HasFileAttribute(path, System.IO.FileAttributes.Hidden);
 			bool isDirectory = Win32Helper.HasFileAttribute(path, System.IO.FileAttributes.Directory);
@@ -494,8 +489,7 @@ namespace Files.App.Helpers
 
 					opened = await OpenFile(path, associatedInstance, shortcutInfo, openViaApplicationPicker, args);
 					break;
-			}
-			;
+			};
 
 			if (opened.ErrorCode == FileSystemStatusCode.NotFound && !openSilent)
 			{
@@ -555,16 +549,13 @@ namespace Files.App.Helpers
 			}
 			else
 			{
-				if (associatedInstance.ShellViewModel is not null)
-				{
-					opened = await associatedInstance.ShellViewModel.GetFolderWithPathFromPathAsync(path)
-						.OnSuccess((childFolder) =>
-						{
-							// Add location to Recent Items List
-							if (childFolder.Item is SystemStorageFolder)
-								WindowsRecentItemsService.Add(childFolder.Path);
-						});
-				}
+				opened = await associatedInstance.ShellViewModel.GetFolderWithPathFromPathAsync(path)
+					.OnSuccess((childFolder) =>
+					{
+						// Add location to Recent Items List
+						if (childFolder?.Item is SystemStorageFolder && !string.IsNullOrEmpty(childFolder.Path))
+							WindowsRecentItemsService.Add(childFolder.Path);
+					});
 				if (!opened)
 					opened = (FilesystemResult)FolderHelpers.CheckFolderAccessWithWin32(path);
 
@@ -590,7 +581,7 @@ namespace Files.App.Helpers
 				}
 				else
 				{
-					if (!FileExtensionHelpers.IsWebLinkFile(path) && associatedInstance.ShellViewModel is not null)
+					if (!FileExtensionHelpers.IsWebLinkFile(path))
 					{
 						StorageFileWithPath childFile = await associatedInstance.ShellViewModel.GetFileWithPathFromPathAsync(shortcutInfo.TargetPath);
 						// Add location to Recent Items List
@@ -607,13 +598,9 @@ namespace Files.App.Helpers
 			}
 			else
 			{
-				if (associatedInstance.ShellViewModel is not null)
-				{
-					var shellViewModel = associatedInstance.ShellViewModel;
-
-					opened = await shellViewModel.GetFileWithPathFromPathAsync(path)
-						.OnSuccess(async childFile =>
-						{
+				opened = await associatedInstance.ShellViewModel.GetFileWithPathFromPathAsync(path)
+					.OnSuccess(async childFile =>
+					{
 						// Add location to Recent Items List
 						if (childFile.Item is SystemStorageFile)
 							WindowsRecentItemsService.Add(childFile.Path);
@@ -639,7 +626,7 @@ namespace Files.App.Helpers
 								bool launchSuccess = false;
 								BaseStorageFileQueryResult? fileQueryResult = null;
 								//Get folder to create a file query (to pass to apps like Photos, Movies & TV..., needed to scroll through the folder like what Windows Explorer does)
-								BaseStorageFolder currentFolder = await shellViewModel.GetFolderFromPathAsync(PathNormalization.GetParentDir(path));
+								BaseStorageFolder currentFolder = await associatedInstance.ShellViewModel.GetFolderFromPathAsync(PathNormalization.GetParentDir(path));
 								if (currentFolder is not null)
 								{
 									QueryOptions queryOptions = new(CommonFileQuery.DefaultQuery, null);
@@ -704,7 +691,6 @@ namespace Files.App.Helpers
 							}
 						}
 					});
-				}
 			}
 			return opened;
 		}

@@ -5,6 +5,7 @@ using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Navigation;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -24,6 +25,11 @@ namespace Files.App.Views.Shells
 		private Task _gitFetch = Task.CompletedTask;
 
 		private CancellationTokenSource _gitFetchToken = new CancellationTokenSource();
+		
+		// Navigation throttling to prevent reentrancy crashes
+		protected readonly SemaphoreSlim _navigationSemaphore = new(1, 1);
+		protected DateTime _lastNavigationTime = DateTime.MinValue;
+		protected const int NavigationThrottleMs = 100;
 
 		public static readonly DependencyProperty NavParamsProperty =
 			DependencyProperty.Register(
@@ -136,6 +142,9 @@ namespace Files.App.Views.Shells
 				{
 					_IsCurrentInstance = value;
 
+					if (!value && SlimContentPage is not ColumnsLayoutPage)
+						ToolbarViewModel.IsEditModeEnabled = false;
+
 					if (value)
 						_IsCurrentInstanceTCS.TrySetResult();
 					else
@@ -176,10 +185,17 @@ namespace Files.App.Views.Shells
 				FlowDirection = FlowDirection.RightToLeft;
 
 			ToolbarViewModel.ToolbarPathItemInvoked += ShellPage_NavigationRequested;
+			ToolbarViewModel.ToolbarFlyoutOpening += ShellPage_ToolbarFlyoutOpening;
+			ToolbarViewModel.ToolbarPathItemLoaded += ShellPage_ToolbarPathItemLoaded;
+			ToolbarViewModel.AddressBarTextEntered += ShellPage_AddressBarTextEntered;
 			ToolbarViewModel.PathBoxItemDropped += ShellPage_PathBoxItemDropped;
 
+			ToolbarViewModel.EditModeEnabled += NavigationToolbar_EditModeEnabled;
 			ToolbarViewModel.ItemDraggedOverPathItem += ShellPage_NavigationRequested;
 			ToolbarViewModel.PathBoxQuerySubmitted += NavigationToolbar_QuerySubmitted;
+			ToolbarViewModel.SearchBox.TextChanged += ShellPage_TextChanged;
+			ToolbarViewModel.SearchBox.QuerySubmitted += ShellPage_QuerySubmitted;
+			ToolbarViewModel.SearchBox.Escaped += ShellPage_SearchEscaped;
 
 			InstanceViewModel.FolderSettings.SortDirectionPreferenceUpdated += AppSettings_SortDirectionPreferenceUpdated;
 			InstanceViewModel.FolderSettings.SortOptionPreferenceUpdated += AppSettings_SortOptionPreferenceUpdated;
@@ -238,17 +254,16 @@ namespace Files.App.Views.Shells
 					? headBranch.Name
 					: string.Empty;
 
-				var isGitFetchCanceled = false;
 				if (!_gitFetch.IsCompleted)
 				{
 					_gitFetchToken.Cancel();
-					_gitFetchToken = new CancellationTokenSource();
-					isGitFetchCanceled = true;
+					await _gitFetch;
+					_gitFetchToken.TryReset();
 				}
-				if (InstanceViewModel.IsGitRepository && (!GitHelpers.IsExecutingGitAction || isGitFetchCanceled))
+				if (InstanceViewModel.IsGitRepository && !GitHelpers.IsExecutingGitAction)
 				{
 					_gitFetch = Task.Run(
-						() => GitHelpers.FetchOrigin(InstanceViewModel.GitRepositoryPath, _gitFetchToken.Token),
+						() => GitHelpers.FetchOrigin(InstanceViewModel.GitRepositoryPath),
 						_gitFetchToken.Token);
 				}
 			}
@@ -336,6 +351,99 @@ namespace Files.App.Views.Shells
 			}
 		}
 
+		protected async void ShellPage_QuerySubmitted(ISearchBoxViewModel sender, SearchBoxQuerySubmittedEventArgs e)
+		{
+			if (e.ChosenSuggestion is SuggestionModel item && !string.IsNullOrWhiteSpace(item.ItemPath))
+				await NavigationHelpers.OpenPath(item.ItemPath, this);
+			else if (e.ChosenSuggestion is null && !string.IsNullOrWhiteSpace(sender.Query))
+			{
+				if (sender.IsFilterMode)
+				{
+					// In filter mode, just apply the filter without navigating to search results
+					ShellViewModel.FilesAndFoldersFilter = sender.Query;
+					await ShellViewModel.ApplyFilesAndFoldersChangesAsync();
+				}
+				else
+				{
+					// In search mode, navigate to search results page
+					SubmitSearch(sender.Query);
+				}
+			}
+		}
+
+		private CancellationTokenSource _filterDebounceTokenSource;
+		private const int FilterDebounceDelayMs = 300;
+
+		protected async void ShellPage_TextChanged(ISearchBoxViewModel sender, SearchBoxTextChangedEventArgs e)
+		{
+			// In filter mode, we need to handle both user input and programmatic changes (like escape key)
+			if (e.Reason != SearchBoxTextChangeReason.UserInput && !sender.IsFilterMode)
+				return;
+
+			// Cancel any previous pending filter operation
+			var oldTokenSource = _filterDebounceTokenSource;
+			_filterDebounceTokenSource = new CancellationTokenSource();
+			oldTokenSource?.Cancel();
+			oldTokenSource?.Dispose();
+			var cancellationToken = _filterDebounceTokenSource.Token;
+
+			if (sender.IsFilterMode)
+			{
+				// Debounce the filter to avoid processing on every keystroke
+				try
+				{
+					await Task.Delay(FilterDebounceDelayMs, cancellationToken);
+					
+					if (!cancellationToken.IsCancellationRequested)
+					{
+						// In filter mode, apply the filter to current directory
+						ShellViewModel.FilesAndFoldersFilter = sender.Query;
+						await ShellViewModel.ApplyFilesAndFoldersChangesAsync();
+						
+						// Clear suggestions in filter mode
+						sender.ClearSuggestions();
+					}
+				}
+				catch (TaskCanceledException)
+				{
+					// Expected when user types another character
+				}
+			}
+			else
+			{
+				// In search mode, clear the filter and show search suggestions
+				ShellViewModel.FilesAndFoldersFilter = string.Empty;
+				await ShellViewModel.ApplyFilesAndFoldersChangesAsync();
+
+				if (!string.IsNullOrWhiteSpace(sender.Query))
+				{
+					var search = new FolderSearch
+					{
+						Query = sender.Query,
+						Folder = ShellViewModel.WorkingDirectory,
+						MaxItemCount = 10,
+					};
+
+					sender.SetSuggestions((await search.SearchAsync()).Select(suggestion => new SuggestionModel(suggestion)));
+				}
+				else
+				{
+					sender.AddRecentQueries();
+				}
+			}
+		}
+
+		protected async void ShellPage_SearchEscaped(object sender, ISearchBoxViewModel e)
+		{
+			if (e.IsFilterMode)
+			{
+				// Clear filter text when escape is pressed in filter mode, but keep filter mode active
+				e.Query = string.Empty;
+				ShellViewModel.FilesAndFoldersFilter = string.Empty;
+				await ShellViewModel.ApplyFilesAndFoldersChangesAsync();
+			}
+		}
+
 		protected void AppSettings_SortDirectionPreferenceUpdated(object sender, SortDirection e)
 		{
 			ShellViewModel?.UpdateSortDirectionStatusAsync();
@@ -373,9 +481,36 @@ namespace Files.App.Views.Shells
 			e.SignalEvent?.Set();
 		}
 
+		protected async void ShellPage_AddressBarTextEntered(object sender, AddressBarTextEnteredEventArgs e)
+		{
+			await ToolbarViewModel.SetAddressBarSuggestionsAsync(e.AddressBarTextField, this);
+		}
+
+		protected async void ShellPage_ToolbarPathItemLoaded(object sender, ToolbarPathItemLoadedEventArgs e)
+		{
+			await ToolbarViewModel.SetPathBoxDropDownFlyoutAsync(e.OpenedFlyout, e.Item);
+		}
+
+		protected async void ShellPage_ToolbarFlyoutOpening(object sender, ToolbarFlyoutOpeningEventArgs e)
+		{
+			var pathBoxItem = ((Button)e.OpeningFlyout.Target).DataContext as PathBoxItem;
+
+			if (pathBoxItem is not null)
+				await ToolbarViewModel.SetPathBoxDropDownFlyoutAsync(e.OpeningFlyout, pathBoxItem);
+		}
+
 		protected async void NavigationToolbar_QuerySubmitted(object sender, ToolbarQuerySubmittedEventArgs e)
 		{
 			await ToolbarViewModel.CheckPathInputAsync(e.QueryText, ToolbarViewModel.PathComponents.LastOrDefault()?.Path, this);
+		}
+
+		protected void NavigationToolbar_EditModeEnabled(object sender, EventArgs e)
+		{
+			ToolbarViewModel.ManualEntryBoxLoaded = true;
+			ToolbarViewModel.ClickablePathLoaded = false;
+			ToolbarViewModel.PathText = string.IsNullOrEmpty(ShellViewModel?.WorkingDirectory)
+				? Constants.UserEnvironmentPaths.HomePath
+				: ShellViewModel.WorkingDirectory;
 		}
 
 		protected async void DrivesManager_PropertyChanged(object sender, PropertyChangedEventArgs e)
@@ -412,13 +547,7 @@ namespace Files.App.Views.Shells
 				// Clear the path UI
 				ToolbarViewModel.PathComponents.Clear();
 				ToolbarViewModel.IsSingleItemOverride = true;
-				ToolbarViewModel.PathComponents.Add(
-					new()
-					{
-						Path = null,
-						Title = singleItemOverride,
-						ChevronToolTip = string.Format(Strings.BreadcrumbBarChevronButtonToolTip.GetLocalizedResource(), singleItemOverride),
-					});
+				ToolbarViewModel.PathComponents.Add(new PathBoxItem() { Path = null, Title = singleItemOverride });
 			}
 		}
 
@@ -765,14 +894,23 @@ namespace Files.App.Views.Shells
 
 		public virtual void Dispose()
 		{
+			_filterDebounceTokenSource?.Cancel();
+			_filterDebounceTokenSource?.Dispose();
 			PreviewKeyDown -= ShellPage_PreviewKeyDown;
 			PointerPressed -= CoreWindow_PointerPressed;
 			drivesViewModel.PropertyChanged -= DrivesManager_PropertyChanged;
 
 			ToolbarViewModel.ToolbarPathItemInvoked -= ShellPage_NavigationRequested;
+			ToolbarViewModel.ToolbarFlyoutOpening -= ShellPage_ToolbarFlyoutOpening;
+			ToolbarViewModel.ToolbarPathItemLoaded -= ShellPage_ToolbarPathItemLoaded;
+			ToolbarViewModel.AddressBarTextEntered -= ShellPage_AddressBarTextEntered;
 			ToolbarViewModel.PathBoxItemDropped -= ShellPage_PathBoxItemDropped;
+			ToolbarViewModel.EditModeEnabled -= NavigationToolbar_EditModeEnabled;
 			ToolbarViewModel.ItemDraggedOverPathItem -= ShellPage_NavigationRequested;
 			ToolbarViewModel.PathBoxQuerySubmitted -= NavigationToolbar_QuerySubmitted;
+			ToolbarViewModel.SearchBox.TextChanged -= ShellPage_TextChanged;
+			ToolbarViewModel.SearchBox.QuerySubmitted -= ShellPage_QuerySubmitted;
+			ToolbarViewModel.SearchBox.Escaped -= ShellPage_SearchEscaped;
 
 			InstanceViewModel.FolderSettings.LayoutPreferencesUpdateRequired -= FolderSettings_LayoutPreferencesUpdateRequired;
 			InstanceViewModel.FolderSettings.SortDirectionPreferenceUpdated -= AppSettings_SortDirectionPreferenceUpdated;

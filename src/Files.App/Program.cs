@@ -9,6 +9,8 @@ using System.IO;
 using System.Text;
 using Windows.ApplicationModel.Activation;
 using Windows.Storage;
+using static Files.App.Helpers.Win32PInvoke;
+using Microsoft.Extensions.Logging;
 
 namespace Files.App
 {
@@ -20,11 +22,16 @@ namespace Files.App
 	/// </remarks>
 	internal sealed class Program
 	{
+		private const uint CWMO_DEFAULT = 0;
+		private const uint INFINITE = 0xFFFFFFFF;
+
 		public static Semaphore? Pool { get; set; }
 
-		static Program()
+		private static void HandleSingleInstance()
 		{
-			var pool = new Semaphore(0, 1, $"Files-{AppLifecycleHelper.AppEnvironment}-Instance", out var isNew);
+			// Use a simple hardcoded environment name to avoid early Package.Current access
+			var envName = "Dev"; // Will be properly initialized later in the app lifecycle
+			var pool = new Semaphore(0, 1, $"Files-{envName}-Instance", out var isNew);
 
 			if (!isNew)
 			{
@@ -55,8 +62,11 @@ namespace Files.App
 			Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 			WinRT.ComWrappersSupport.InitializeComWrappers();
 
+			// Handle single instance after WinRT is initialized
+			HandleSingleInstance();
+
 			// We are about to do the first WinRT server call, in case the WinRT server is hanging
-			// we need to kill the server if there are no other Files instances already running
+			// we need to kill the server if there is no other Files instances already running
 
 			static bool ProcessPathPredicate(Process p)
 			{
@@ -95,7 +105,7 @@ namespace Files.App
 			}
 
 			// NOTE:
-			//  This has been commented out since out-of-proc WinRT server seems not to support elevation.
+			//  This has been commentted out since out-of-proc WinRT server seems not to support elevetion.
 			//  For more info, see the GitHub issue (#15384).
 			// Now we can do the first WinRT server call
 			//Server.AppInstanceMonitor.StartMonitor(Environment.ProcessId);
@@ -246,7 +256,27 @@ namespace Files.App
 		/// </remarks>
 		public static void RedirectActivationTo(AppInstance keyInstance, AppActivationArguments args)
 		{
-			keyInstance.RedirectActivationToAsync(args).AsTask().Wait();
+			IntPtr eventHandle = CreateEvent(IntPtr.Zero, true, false, null);
+
+			Task.Run(() =>
+			{
+				keyInstance.RedirectActivationToAsync(args).AsTask().Wait();
+				SetEvent(eventHandle);
+			});
+
+			var hr = CoWaitForMultipleObjects(
+				CWMO_DEFAULT,
+				INFINITE,
+				1,
+				[eventHandle],
+				out uint handleIndex);
+			
+			CloseHandle(eventHandle);
+			
+			if (hr.Failed)
+			{
+				App.Logger.LogError($"CoWaitForMultipleObjects failed with HRESULT: {hr}");
+			}
 		}
 
 		public static void OpenShellCommandInExplorer(string shellCommand, int pid)
@@ -256,7 +286,27 @@ namespace Files.App
 
 		public static void OpenFileFromTile(string filePath)
 		{
-			LaunchHelper.LaunchAppAsync(filePath, null, null).Wait();
+			IntPtr eventHandle = CreateEvent(IntPtr.Zero, true, false, null);
+
+			Task.Run(() =>
+			{
+				LaunchHelper.LaunchAppAsync(filePath, null, null).Wait();
+				SetEvent(eventHandle);
+			});
+
+			var hr = CoWaitForMultipleObjects(
+				CWMO_DEFAULT,
+				INFINITE,
+				1,
+				[eventHandle],
+				out uint handleIndex);
+			
+			CloseHandle(eventHandle);
+			
+			if (hr.Failed)
+			{
+				App.Logger.LogError($"CoWaitForMultipleObjects failed with HRESULT: {hr}");
+			}
 		}
 	}
 }

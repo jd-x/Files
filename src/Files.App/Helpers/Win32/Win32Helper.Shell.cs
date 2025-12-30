@@ -13,23 +13,33 @@ namespace Files.App.Helpers
 	/// </summary>
 	public static partial class Win32Helper
 	{
+		private readonly static ShellFolder _controlPanel = new(Shell32.KNOWNFOLDERID.FOLDERID_ControlPanelFolder);
+
+		private readonly static ShellFolder _controlPanelCategoryView = new("::{26EE0668-A00A-44D7-9371-BEB064C98683}");
+
 		public static async Task<(ShellFileItem Folder, List<ShellFileItem> Enumerate)> GetShellFolderAsync(string path, bool getFolder, bool getEnumerate, int from, int count, params string[] properties)
 		{
 			if (path.StartsWith("::{", StringComparison.Ordinal))
 			{
-				path = $"shell:{path}";
+				path = $"shell:{path.Substring(1)}";
 			}
 
-			return await STATask.Run(() =>
+			return await Win32Helper.StartSTATask(() =>
 			{
 				var flc = new List<ShellFileItem>();
 				var folder = (ShellFileItem)null;
 
 				try
 				{
-					using var shellFolder = ShellFolderExtensions.GetShellItemFromPathOrPIDL(path) as ShellFolder;
-					using ShellFolder _controlPanel = new(Shell32.KNOWNFOLDERID.FOLDERID_ControlPanelFolder);
-					using ShellFolder _controlPanelCategoryView = new("::{26EE0668-A00A-44D7-9371-BEB064C98683}");
+					var shellItem = ShellFolderExtensions.GetShellItemFromPathOrPIDL(path);
+					if (shellItem is null)
+					{
+						// Shell namespace extension not found or not accessible
+						// Return empty result for graceful fallback
+						return (null, flc);
+					}
+
+					using var shellFolder = shellItem as ShellFolder;
 
 					if (shellFolder is null ||
 						(_controlPanel.PIDL.IsParentOf(shellFolder.PIDL, false) ||
@@ -75,7 +85,7 @@ namespace Files.App.Helpers
 				}
 
 				return (folder, flc);
-			}, App.Logger);
+			});
 		}
 
 		public static string GetFolderFromKnownFolderGUID(Guid guid)

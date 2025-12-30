@@ -2,6 +2,9 @@
 // Licensed under the MIT License.
 
 using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using Vanara.PInvoke;
 using Vanara.Windows.Shell;
 
@@ -166,7 +169,97 @@ namespace Files.App.Utils.Shell
 
 		public static ShellItem GetShellItemFromPathOrPIDL(string pathOrPIDL)
 		{
-			return GetStringAsPIDL(pathOrPIDL, out var pPIDL) ? ShellItem.Open(pPIDL) : ShellItem.Open(pathOrPIDL);
+			try
+			{
+				// For drive paths, check if the drive exists and is ready before attempting to open
+				if (pathOrPIDL.Length == 3 && pathOrPIDL.EndsWith(@":\", StringComparison.Ordinal))
+				{
+					try
+					{
+						var driveInfo = new DriveInfo(pathOrPIDL.Substring(0, 1));
+						if (!driveInfo.IsReady)
+						{
+							App.Logger.LogWarning($"Drive not ready: {pathOrPIDL}");
+							return null;
+						}
+					}
+					catch (ArgumentException)
+					{
+						App.Logger.LogWarning($"Invalid drive: {pathOrPIDL}");
+						return null;
+					}
+					catch (Exception ex)
+					{
+						App.Logger.LogWarning($"Error checking drive {pathOrPIDL}: {ex.Message}");
+						return null;
+					}
+
+					// For drive root paths, use SHParseDisplayName to get a valid PIDL
+					try
+					{
+						var hresult = Shell32.SHParseDisplayName(pathOrPIDL, IntPtr.Zero, out var pidl, 0, out _);
+						if (hresult == HRESULT.S_OK && !pidl.IsNull)
+						{
+							try
+							{
+								return ShellItem.Open(pidl);
+							}
+							catch (COMException ex) when (ex.HResult == unchecked((int)0x80070490))
+							{
+								App.Logger.LogInformation($"Drive root shell item not accessible: {pathOrPIDL}, HResult: 0x{ex.HResult:X8}");
+								return null;
+							}
+						}
+						else
+						{
+							App.Logger.LogInformation($"Failed to parse drive path to PIDL: {pathOrPIDL}");
+							return null;
+						}
+					}
+					catch (COMException ex) when (ex.HResult == unchecked((int)0x80070490))
+					{
+						App.Logger.LogInformation($"Drive root not accessible: {pathOrPIDL}");
+						return null;
+					}
+				}
+
+				// Try to open the shell item, with specific handling for drive root COM exceptions
+				try
+				{
+					return GetStringAsPIDL(pathOrPIDL, out var pPIDL) ? ShellItem.Open(pPIDL) : ShellItem.Open(pathOrPIDL);
+				}
+				catch (COMException ex) when (ex.HResult == unchecked((int)0x80070490)) // ERROR_NOT_FOUND
+				{
+					// Handle "Element not found" COM exception for drive roots and other problematic paths silently
+					// This commonly happens when trying to access drive roots like C:\ or special shell namespaces
+					App.Logger.LogInformation($"Shell item not accessible (silent): {pathOrPIDL}");
+					return null;
+				}
+			}
+			catch (UnauthorizedAccessException ex)
+			{
+				// Handle access denied errors (common for system files like Prefetch)
+				App.Logger.LogDebug($"Access denied to shell item: {pathOrPIDL}. Error: {ex.Message}");
+				return null;
+			}
+			catch (COMException ex) when (ex.HResult == unchecked((int)0x80070490)) // ERROR_NOT_FOUND
+			{
+				// Shell namespace extension not found or not accessible
+				// This can happen with certain GUIDs like Frequent Places when they're not available
+				App.Logger.LogInformation($"Shell namespace extension not found: {pathOrPIDL}");
+				return null;
+			}
+			catch (COMException ex) when (ex.HResult == unchecked((int)0x80070005)) // E_ACCESSDENIED
+			{
+				// Handle COM access denied errors
+				App.Logger.LogDebug($"COM access denied to shell item: {pathOrPIDL}");
+				return null;
+			}
+			catch (Exception ex)
+			{
+				App.Logger.LogWarning($"Failed to get shell item from path or PIDL: {pathOrPIDL}. Error: {ex.Message}");
+				return null;
+			}
 		}
 	}
 }

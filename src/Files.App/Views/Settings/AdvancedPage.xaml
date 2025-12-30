@@ -168,6 +168,26 @@
 				</wctcontrols:SettingsCard.HeaderIcon>
 				<ToggleSwitch AutomationProperties.Name="{helpers:ResourceString Name=ShowFlattenOptions}" IsOn="{x:Bind ViewModel.ShowFlattenOptions, Mode=TwoWay}" />
 			</wctcontrols:SettingsCard>
+
+			<!--  Omnibar  -->
+			<wctcontrols:SettingsCard Header="{helpers:ResourceString Name=EnableOmnibar}" IsEnabled="{x:Bind ViewModel.IsAppEnvironmentDev, Mode=OneWay}">
+				<wctcontrols:SettingsCard.HeaderIcon>
+					<FontIcon Glyph="&#xECAD;" />
+				</wctcontrols:SettingsCard.HeaderIcon>
+				<ToggleSwitch AutomationProperties.Name="{helpers:ResourceString Name=EnableOmnibar}" IsOn="{x:Bind ViewModel.EnableOmnibar, Mode=TwoWay}" />
+			</wctcontrols:SettingsCard>
+
+			<!--  Search Engine  -->
+			<wctcontrols:SettingsCard Description="{helpers:ResourceString Name=PreferredSearchEngineDescription}" Header="{helpers:ResourceString Name=PreferredSearchEngine}">
+				<wctcontrols:SettingsCard.HeaderIcon>
+					<FontIcon Glyph="&#xE721;" />
+				</wctcontrols:SettingsCard.HeaderIcon>
+				<ComboBox AutomationProperties.Name="{helpers:ResourceString Name=PreferredSearchEngine}" SelectedIndex="{x:Bind ViewModel.PreferredSearchEngineIndex, Mode=TwoWay}">
+					<ComboBoxItem Content="{helpers:ResourceString Name=SearchEngineBuiltInFuzzy}" />
+					<ComboBoxItem Content="{helpers:ResourceString Name=SearchEngineEverything}" />
+					<ComboBoxItem Content="{helpers:ResourceString Name=SearchEngineSimpleContains}" />
+				</ComboBox>
+			</wctcontrols:SettingsCard>
 		</StackPanel>
 	</Grid>
 </Page>

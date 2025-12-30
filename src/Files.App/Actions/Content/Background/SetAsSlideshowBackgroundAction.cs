@@ -6,7 +6,7 @@ namespace Files.App.Actions
 	[GeneratedRichCommand]
 	internal sealed partial class SetAsSlideshowBackgroundAction : BaseSetAsAction
 	{
-		private readonly IWindowsWallpaperService WindowsWallpaperService = Ioc.Default.GetRequiredService<IWindowsWallpaperService>();
+		private new readonly IWindowsWallpaperService WindowsWallpaperService = Ioc.Default.GetRequiredService<IWindowsWallpaperService>();
 
 		public override string Label
 			=> Strings.SetAsSlideshow.GetLocalizedResource();

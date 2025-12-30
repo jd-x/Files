@@ -52,9 +52,9 @@
 						<controls:OmnibarMode
 							IconOnActive="{controls:ThemedIconMarkup Style={StaticResource App.ThemedIcons.Omnibar.Commands}, IsFilled=True}"
 							IconOnInactive="{controls:ThemedIconMarkup Style={StaticResource App.ThemedIcons.Omnibar.Commands}, IconType=Outline}"
-							ItemsSource="{x:Bind Omnibar1_PaletteSuggestions, Mode=OneWay}"
 							ModeName="Palette"
 							PlaceholderText="Enter a palette command..."
+							ItemsSource="{x:Bind Omnibar1_PaletteSuggestions, Mode=OneWay}"
 							TextMemberPath="{x:Bind Omnibar1_TextMemberPathForPaletteMode}">
 							<controls:OmnibarMode.ItemTemplate>
 								<DataTemplate x:DataType="data:OmnibarPaletteSuggestionItem">

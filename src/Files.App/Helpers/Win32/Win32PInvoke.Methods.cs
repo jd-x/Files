@@ -1,11 +1,13 @@
-// Copyright (c) Files Community
-// Licensed under the MIT License.
+// Copyright (c) 2024 Files Community
+// Licensed under the MIT License. See the LICENSE.
 
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
 using System.Text;
 using Windows.Win32.Foundation;
 using Windows.Win32.System.Com;
+using Vanara.PInvoke;
 
 namespace Files.App.Helpers
 {
@@ -66,6 +68,15 @@ namespace Files.App.Helpers
 		[DllImport("kernel32.dll")]
 		public static extern bool SetEvent(
 			IntPtr hEvent
+		);
+
+		[DllImport("ole32.dll")]
+		public static extern Vanara.PInvoke.HRESULT CoWaitForMultipleObjects(
+			uint dwFlags,
+			uint dwMilliseconds,
+			ulong nHandles,
+			IntPtr[] pHandles,
+			out uint dwIndex
 		);
 
 		[DllImport("shell32.dll")]
@@ -222,17 +233,17 @@ namespace Files.App.Helpers
 		[DllImport("api-ms-win-core-file-l1-2-1.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]
 		public static extern bool GetFileTime(
 			[In] IntPtr hFile,
-			out System.Runtime.InteropServices.ComTypes.FILETIME lpCreationTime,
-			out System.Runtime.InteropServices.ComTypes.FILETIME lpLastAccessTime,
-			out System.Runtime.InteropServices.ComTypes.FILETIME lpLastWriteTime
+			out FILETIME lpCreationTime,
+			out FILETIME lpLastAccessTime,
+			out FILETIME lpLastWriteTime
 		);
 
 		[DllImport("api-ms-win-core-file-l1-2-1.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]
 		public static extern bool SetFileTime(
 			[In] IntPtr hFile,
-			in System.Runtime.InteropServices.ComTypes.FILETIME lpCreationTime,
-			in System.Runtime.InteropServices.ComTypes.FILETIME lpLastAccessTime,
-			in System.Runtime.InteropServices.ComTypes.FILETIME lpLastWriteTime
+			in FILETIME lpCreationTime,
+			in FILETIME lpLastAccessTime,
+			in FILETIME lpLastWriteTime
 		);
 
 		[DllImport("api-ms-win-core-file-l2-1-1.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]
@@ -278,7 +289,7 @@ namespace Files.App.Helpers
 
 		[DllImport("api-ms-win-core-timezone-l1-1-0.dll", SetLastError = true)]
 		public static extern bool FileTimeToSystemTime(
-			ref System.Runtime.InteropServices.ComTypes.FILETIME lpFileTime,
+			ref FILETIME lpFileTime,
 			out SYSTEMTIME lpSystemTime
 		);
 
@@ -298,9 +309,9 @@ namespace Files.App.Helpers
 			[MarshalAs(UnmanagedType.LPWStr)] string pszPath);
 
 		[DllImport("shlwapi.dll", CallingConvention = CallingConvention.StdCall, PreserveSig = true, CharSet = CharSet.Unicode)]
-		public static extern HRESULT SHCreateStreamOnFileEx(
+		public static extern Vanara.PInvoke.HRESULT SHCreateStreamOnFileEx(
 			string pszFile,
-			STGM grfMode,
+			Vanara.PInvoke.STGM grfMode,
 			uint dwAttributes,
 			uint fCreate,
 			IntPtr pstmTemplate,
@@ -308,7 +319,7 @@ namespace Files.App.Helpers
 		);
 
 		[DllImport("shell32.dll", CallingConvention = CallingConvention.StdCall, PreserveSig = true, CharSet = CharSet.Unicode)]
-		public static extern HRESULT SHCreateItemFromParsingName(
+		public static extern Vanara.PInvoke.HRESULT SHCreateItemFromParsingName(
 			string pszPath,
 			IntPtr pbc,
 			ref Guid riid,
@@ -316,7 +327,7 @@ namespace Files.App.Helpers
 		);
 
 		[DllImport("ole32.dll", CallingConvention = CallingConvention.StdCall)]
-		public static extern HRESULT CoCreateInstance(
+		public static extern Vanara.PInvoke.HRESULT CoCreateInstance(
 			ref Guid rclsid,
 			IntPtr pUnkOuter,
 			ClassContext dwClsContext,
@@ -337,9 +348,5 @@ namespace Files.App.Helpers
 			IntPtr hToken,
 			out IntPtr pszPath
 		);
-
-		// cryptui.dll
-		[DllImport("cryptui.dll", SetLastError = true, CharSet = CharSet.Auto)]
-		public unsafe static extern bool CryptUIDlgViewSignerInfo(CRYPTUI_VIEWSIGNERINFO_STRUCT* pViewInfo);
 	}
 }
